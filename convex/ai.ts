@@ -172,45 +172,54 @@ Return ONLY a valid JSON object with this exact structure:
     let championCount = 0;
 
     const addCard = (card: any, maxCount = 3) => {
-      if (!card) return;
+      if (!card || !deckConcept.regions.includes(card.region)) {
+        return false; // Card is not in the allowed regions
+      }
+
       const existing = deck[card.cardCode];
+      if (card.type === "Champion") {
+        if (championCount >= 6 && !existing) return false;
+        if (existing && existing.count >= maxCount) return false;
+        if (championCount >= 6 && existing.count >= existing.count) return false;
+      }
 
       if (existing) {
         if (existing.count < maxCount) {
           existing.count++;
           totalCards++;
+          if (card.type === "Champion") championCount++;
+          return true;
         }
       } else {
-        if (card.type === "Champion" && championCount >= 6) return;
         deck[card.cardCode] = { card, count: 1 };
         totalCards++;
-        if (card.type === "Champion") {
-          championCount++;
-        }
+        if (card.type === "Champion") championCount++;
+        return true;
       }
+      return false;
     };
 
-    // 1. Add Champions (3 copies each, up to 6 total)
+    // 1. Add Champions (up to 3 copies each, max 6 total)
     for (const championName of deckConcept.champions) {
       const champCard = cardLookupByName.get(championName.toLowerCase());
       if (champCard) {
         for (let i = 0; i < 3; i++) {
-          if (championCount < 6) {
-            addCard(champCard);
-          }
+          addCard(champCard);
         }
       }
     }
 
-    // 2. Add Core Cards (1-2 copies each)
+    // 2. Add Core Cards (up to 3 copies each)
     for (const cardName of deckConcept.coreCards) {
       const coreCard = cardLookupByName.get(cardName.toLowerCase());
       if (coreCard && coreCard.type !== "Champion") {
-        addCard(coreCard, 2);
+        for (let i = 0; i < 3; i++) {
+          addCard(coreCard);
+        }
       }
     }
 
-    // 3. Fill remaining slots to reach 40 cards
+    // 3. Create a pool of valid candidates for filling the deck
     const fillCandidates = allValidCards.filter(c =>
       deckConcept.regions.includes(c.region) &&
       c.type !== 'Champion' &&
@@ -223,32 +232,38 @@ Return ONLY a valid JSON object with this exact structure:
       [fillCandidates[i], fillCandidates[j]] = [fillCandidates[j], fillCandidates[i]];
     }
 
-    let candidateIndex = 0;
-    let attempts = 0; // Safety break
-    while (totalCards < 40 && attempts < 200) {
-      if (fillCandidates.length === 0) break;
-      const cardToAdd = fillCandidates[candidateIndex];
-      addCard(cardToAdd);
+    // 4. Fill remaining slots to reach 40 cards
+    let attempts = 0;
+    while (totalCards < 40 && attempts < 500) {
+      // Prioritize adding copies of existing cards
+      const existingCards = Object.values(deck).map(d => d.card);
+      let cardAdded = false;
+      for (const card of existingCards) {
+        if (totalCards >= 40) break;
+        if (addCard(card)) {
+          cardAdded = true;
+        }
+      }
 
-      // Move to the next candidate, but loop back to the start
-      // to try and add more copies of the same cards.
-      candidateIndex = (candidateIndex + 1) % fillCandidates.length;
+      // If no more copies can be added, add a new card from the candidate pool
+      if (!cardAdded && fillCandidates.length > 0) {
+        for (const candidate of fillCandidates) {
+           if (totalCards >= 40) break;
+           if (addCard(candidate)) {
+             break; // Added a new card, restart the loop
+           }
+        }
+      }
       attempts++;
     }
 
-    // 4. Final adjustments to hit exactly 40 cards
-    // Remove excess cards, starting with cheapest non-champions
-    while (totalCards > 40) {
-      const deckAsArray = Object.values(deck);
-      const nonChamps = deckAsArray.filter(c => c.card.type !== "Champion" && c.count > 0);
-      if (nonChamps.length === 0) break; // Should not happen
-      nonChamps.sort((a, b) => a.card.cost - b.card.cost);
-      const cardToRemove = nonChamps[0];
-      cardToRemove.count--;
-      totalCards--;
-      if (cardToRemove.count === 0) {
-        delete deck[cardToRemove.card.cardCode];
-      }
+    // 5. Final validation: if deck is not 40 cards, throw an error
+    if (totalCards !== 40) {
+      throw new Error(
+        `Failed to construct a valid 40-card deck. ` +
+        `Ended up with ${totalCards} cards. ` +
+        `This may be due to a very restrictive prompt or too few available cards in the selected regions.`
+      );
     }
 
     const finalCards = Object.values(deck).map(({ card, count }) => ({

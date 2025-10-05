@@ -168,16 +168,28 @@ Return ONLY a valid JSON object with this exact structure:
 
     // --- DECK CONSTRUCTION LOGIC ---
 
-    // Sanitize AI suggestions to ensure they are valid and consistent.
+    // 1. Sanitize AI suggestions and derive regions from the cards themselves.
     const getCard = (name: string) => cardLookupByName.get(name.toLowerCase());
 
-    const sanitizedChampions = deckConcept.champions
-      .map(getCard)
-      .filter((c: any) => c && deckConcept.regions.includes(c.region));
+    const allSuggestedCards = [
+      ...deckConcept.champions.map(getCard),
+      ...deckConcept.coreCards.map(getCard)
+    ].filter(Boolean); // .filter(Boolean) removes any undefined/invalid cards
 
-    const sanitizedCoreCards = deckConcept.coreCards
-      .map(getCard)
-      .filter((c: any) => c && deckConcept.regions.includes(c.region));
+    const regionCounts: { [region: string]: number } = {};
+    for (const card of allSuggestedCards) {
+      if (card.region !== 'Runeterra' && card.region !== 'Bandle City') { // Exclude general regions for counting
+        regionCounts[card.region] = (regionCounts[card.region] || 0) + 1;
+      }
+    }
+
+    const derivedRegions = Object.keys(regionCounts)
+      .sort((a, b) => regionCounts[b] - regionCounts[a])
+      .slice(0, 2);
+
+    // 2. Filter the suggested cards to only include those from the derived regions.
+    const sanitizedChampions = allSuggestedCards.filter((c: any) => c.type === 'Champion' && derivedRegions.includes(c.region));
+    const sanitizedCoreCards = allSuggestedCards.filter((c: any) => c.type !== 'Champion' && derivedRegions.includes(c.region));
 
     const deck: { [cardCode: string]: { card: any; count: number } } = {};
     let totalCards = 0;
@@ -185,8 +197,8 @@ Return ONLY a valid JSON object with this exact structure:
 
     const addCard = (card: any, maxCount = 3) => {
       if (!card) return false;
-
       const existing = deck[card.cardCode];
+
       if (card.type === "Champion") {
         if (championCount >= 6 && !existing) return false;
         if (existing && existing.count >= maxCount) return false;
@@ -206,25 +218,17 @@ Return ONLY a valid JSON object with this exact structure:
       return true;
     };
 
-    // 1. Add Sanitized Champions
+    // 3. Add the sanitized champions and core cards to the deck.
     for (const champCard of sanitizedChampions) {
-      for (let i = 0; i < 3; i++) {
-        addCard(champCard);
-      }
+      for (let i = 0; i < 3; i++) addCard(champCard);
     }
-
-    // 2. Add Sanitized Core Cards
     for (const coreCard of sanitizedCoreCards) {
-      if (coreCard.type !== "Champion") {
-        for (let i = 0; i < 3; i++) {
-          addCard(coreCard);
-        }
-      }
+      for (let i = 0; i < 3; i++) addCard(coreCard);
     }
 
-    // 3. Create a pool of valid candidates for filling the deck
+    // 4. Create a pool of candidates to fill the rest of the deck.
     const fillCandidates = allValidCards.filter(c =>
-      deckConcept.regions.includes(c.region) &&
+      derivedRegions.includes(c.region) &&
       c.type !== 'Champion' &&
       c.cost > 0
     );

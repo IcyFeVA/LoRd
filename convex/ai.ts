@@ -388,28 +388,29 @@ export const importDeckFromCode = action({
 });
 
 function generateDeckCode(cards: Array<{ cardCode: string; count: number }>): string {
-  // Validate card code format (must be 7 chars: 2 digits + 2 letters + 3 digits)
-  const validPattern = /^\d{2}[A-Z]{2}\d{3}$/;
-  const invalidCards = cards.filter(c => !validPattern.test(c.cardCode));
-  
-  if (invalidCards.length > 0) {
-    throw new Error(`Invalid card code format: ${invalidCards.map(c => c.cardCode).join(", ")}`);
+  try {
+    // Convert to the format expected by the LoR deck encoder
+    const lorCards = cards.map(c => {
+      const set = c.cardCode.substring(0, 2);
+      const faction = c.cardCode.substring(2, 4);
+      const number = c.cardCode.substring(4, 7);
+      return Card.from(set, faction, number, c.count);
+    });
+
+    // Generate official LoR deck code
+    const encoded = DeckEncoder.encode(lorCards);
+
+    if (!encoded || encoded.length === 0) {
+      throw new Error("Failed to generate deck code");
+    }
+
+    return encoded;
+  } catch (error: any) {
+    console.error("Error during deck code generation:", error);
+    // Add more context to the error
+    const cardCodes = cards.map(c => c.cardCode).join(", ");
+    throw new Error(`Failed to encode deck. Please check card codes: [${cardCodes}]. Original error: ${error.message}`);
   }
-  
-  // Convert to the format expected by the LoR deck encoder
-  const lorCards = cards.map(c => ({
-    code: c.cardCode,
-    count: c.count,
-  }));
-  
-  // Generate official LoR deck code
-  const encoded = DeckEncoder.encode(lorCards as any);
-  
-  if (!encoded || encoded.length === 0) {
-    throw new Error("Failed to generate deck code");
-  }
-  
-  return encoded;
 }
 
 export const regenerateDeckCode = action({

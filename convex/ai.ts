@@ -36,7 +36,10 @@ export const generateDeck = action({
     const filterValidCards = (cards: any[]) => {
       return cards.filter(card => {
         try {
-          Card.fromCode(card.cardCode);
+          const set = card.cardCode.substring(0, 2);
+          const faction = card.cardCode.substring(2, 4);
+          const number = card.cardCode.substring(4, 7);
+          Card.from(set, faction, number, 1);
           return true;
         } catch (e) {
           return false;
@@ -49,9 +52,9 @@ export const generateDeck = action({
     const validSpells = filterValidCards(cardDatabase.spells);
     const allValidCards = [...validChampions, ...validUnits, ...validSpells];
     
-    // Create a lookup map for fast card validation
-    const cardLookup = new Map(
-      allValidCards.map(card => [card.cardCode, card])
+    // Create a lookup map for fast card validation by name
+    const cardLookupByName = new Map(
+      allValidCards.map(card => [card.name.toLowerCase(), card])
     );
     
     console.log(`Loaded ${allValidCards.length} of ${cardDatabase.totalCount} cards from database compatible with encoder`);
@@ -83,16 +86,16 @@ export const generateDeck = action({
       cardPoolsSection += `${region.toUpperCase()}:\n`;
       
       if (championsByRegion[region]?.length > 0) {
-        cardPoolsSection += `Champions: ${championsByRegion[region].map(c => `${c.code} (${c.name}, ${c.cost} mana)`).join(", ")}\n`;
+        cardPoolsSection += `Champions: ${championsByRegion[region].map(c => c.name).join(", ")}\n`;
       }
       
       if (unitsByRegion[region]?.length > 0) {
-        const unitList = unitsByRegion[region].map(c => `${c.code} (${c.name}, ${c.cost} mana)`).join(", ");
+        const unitList = unitsByRegion[region].map(c => c.name).join(", ");
         cardPoolsSection += `Units: ${unitList}\n`;
       }
       
       if (spellsByRegion[region]?.length > 0) {
-        const spellList = spellsByRegion[region].map(c => `${c.code} (${c.name}, ${c.cost} mana)`).join(", ");
+        const spellList = spellsByRegion[region].map(c => c.name).join(", ");
         cardPoolsSection += `Spells: ${spellList}\n`;
       }
       
@@ -101,55 +104,37 @@ export const generateDeck = action({
     
     const allChampionNames = validChampions.map(c => c.name).join(", ");
 
-    const systemPrompt = `You are a Legends of Runeterra deck building expert. Generate a VALID 40-card deck.
+    const systemPrompt = `You are a Legends of Runeterra deck building expert. Your task is to generate a high-level deck concept based on the user's prompt.
 
-CRITICAL RULES (MUST FOLLOW):
-1. EXACTLY 40 cards total (sum all card counts)
-2. Maximum 3 copies of ANY single card
-3. Maximum 6 champion cards total across entire deck
-4. Use 1-2 regions only
-5. All cards MUST be from the selected regions
-6. NEVER include 0-cost cards
-7. ONLY use cards from the card pools listed below - NO OTHER CARDS ALLOWED
-8. 🚨 EVERY card code MUST be from the lists below
-
-DECK COMPOSITION:
-- Champions: 4-6 total champion cards (usually 2-3 different champions, 2-3 copies each)
-- Units: 20-28 follower units (non-champion creatures)
-- Spells: 8-16 spells
-- Mana curve distribution:
-  * 1-2 mana: 8-12 cards (early game)
-  * 3-4 mana: 10-14 cards (mid game)
-  * 5-6 mana: 6-10 cards (late game)
-  * 7+ mana: 2-4 cards (finishers)
+CRITICAL RULES FOR YOUR RESPONSE:
+1.  **CHOOSE 1-2 REGIONS ONLY.** All suggested champions and cards must belong to these regions.
+2.  **SUGGEST 2-3 CHAMPIONS.** Provide their names, not card codes.
+3.  **LIST 10-15 CORE CARDS.** These are essential cards that define the deck's strategy. Provide their names, not card codes.
+4.  **DO NOT SUGGEST 0-COST CARDS.**
+5.  **ONLY USE CARDS FROM THE PROVIDED CARD POOLS.**
 
 ${cardPoolsSection}
 
 Return ONLY a valid JSON object with this exact structure:
 {
   "name": "Deck Name",
-  "description": "Brief description of deck strategy and win condition",
-  "cards": [
-    {"cardCode": "01DE012", "count": 3},
-    {"cardCode": "01DE002", "count": 3}
-  ],
+  "description": "Brief description of deck strategy, win condition, and playstyle (e.g., Aggro, Midrange, Control).",
   "regions": ["Demacia", "Freljord"],
-  "champions": ["Garen", "Braum"]
+  "champions": ["Garen", "Braum"],
+  "coreCards": ["Single Combat", "Sharpsight", "Ranger's Resolve"],
+  "playstyle": "Midrange"
 }
 
 ⚠️ MANDATORY VALIDATION BEFORE RESPONDING:
-1. Calculate total: sum ALL card counts = MUST BE EXACTLY 40
-2. If total ≠ 40, ADD OR REMOVE cards until it equals 40
-3. Total champion cards ≤ 6
-4. No card has count > 3
-5. All cards match the 1-2 selected regions
-6. ONLY cards from the provided card pools above - USE EXACT CARD CODES LISTED`;
+1.  Ensure all champion and card names are spelled correctly and exist in the provided card pools.
+2.  Ensure the regions are correct for all suggested cards.
+3.  Ensure the JSON is perfectly formatted.`;
 
     const response = await openai.chat.completions.create({
       model: "openai/gpt-4.1",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `${args.prompt}\n\n🚨 AVAILABLE CHAMPIONS: ${allChampionNames}\n\nIf the user asks for a champion NOT in this list, pick similar champions that ARE available. The deck MUST have EXACTLY 40 cards total and use ONLY card codes from the lists provided.` },
+        { role: "user", content: `${args.prompt}\n\n🚨 AVAILABLE CHAMPIONS: ${allChampionNames}\n\nIf the user asks for a champion NOT in this list, pick similar champions that ARE available.` },
       ],
       temperature: 0.7,
     });
@@ -179,191 +164,204 @@ Return ONLY a valid JSON object with this exact structure:
     // Remove trailing commas before closing braces/brackets
     jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
     
-    let deckData = JSON.parse(jsonStr);
-    
-    // Add card names, costs, types, and regions
-    // Filter out any invalid/unknown cards first, then add metadata
-    deckData.cards = deckData.cards
-      .filter((card: any) => {
-        const info = cardLookup.get(card.cardCode);
-        // Only keep cards that exist in our database
-        return info !== undefined;
-      })
-      .map((card: any) => {
-        const info = cardLookup.get(card.cardCode)!;
-        return {
-          cardCode: card.cardCode,
-          count: card.count,
-          name: info.name,
-          cost: info.cost,
-          type: info.type,
-          region: info.region,
-        };
-      });
-    
-    // CRITICAL: Validate we have cards after filtering
-    if (deckData.cards.length === 0) {
-      throw new Error("No valid cards found. The card database may be empty. Please wait a moment and try again.");
-    }
-    
-    // Check if we have enough cards to build a deck
-    if (deckData.cards.length < 10) {
-      throw new Error(`Only ${deckData.cards.length} valid cards found. The card database may not be fully loaded. Please try again in a moment.`);
-    }
-    
-    // Validate champions match what's in the deck
-    const actualChampions = deckData.cards.filter((c: any) => c.type === "Champion").map((c: any) => c.name);
-    if (actualChampions.length === 0 && deckData.champions?.length > 0) {
-      throw new Error(`Requested champions not available. Available: ${allChampionNames}`);
-    }
-    
-    // Validate and auto-fix champion count
-    let totalChampions = deckData.cards
-      .filter((c: any) => c.type === "Champion")
-      .reduce((sum: number, c: any) => sum + c.count, 0);
+    const deckConcept = JSON.parse(jsonStr);
 
-    let attempts = 0;
-    while (totalChampions > 6 && attempts < 20) {
-      attempts++;
-      const champCards = deckData.cards.filter((c: any) => c.type === "Champion" && c.count > 0);
-      if (champCards.length === 0) break;
-      champCards.sort((a: any, b: any) => b.count - a.count);
-      champCards[0].count--;
-      totalChampions--;
-    }
-    deckData.cards = deckData.cards.filter((c: any) => c.count > 0);
+    // --- DECK CONSTRUCTION LOGIC ---
 
-    // Auto-fix total card count to be exactly 40
-    let totalCards = deckData.cards.reduce((sum: number, c: any) => sum + c.count, 0);
+    // 1. Sanitize AI suggestions and derive regions from the cards themselves.
+    const getCard = (name: string) => cardLookupByName.get(name.toLowerCase());
     
-    // Add cards if under 40
-    attempts = 0;
-    while (totalCards < 40 && attempts < 100) {
-      attempts++;
-      const candidates = deckData.cards.filter((c: any) => c.type !== "Champion" && c.count < 3);
-      if (candidates.length === 0) {
-        // Try adding champions if we can't add more non-champions
-        const champCandidates = deckData.cards.filter((c: any) => c.type === "Champion" && c.count < 3);
-        const currentChampTotal = deckData.cards
-          .filter((c: any) => c.type === "Champion")
-          .reduce((sum: number, c: any) => sum + c.count, 0);
-        
-        if (champCandidates.length > 0 && currentChampTotal < 6) {
-          champCandidates.sort((a: any, b: any) => a.cost - b.cost);
-          const cardToAdjust = deckData.cards.find((c: any) => c.cardCode === champCandidates[0].cardCode);
-          if (cardToAdjust) {
-            cardToAdjust.count++;
-            totalCards++;
-            continue;
-          }
-        }
-        throw new Error(`Deck has only ${deckData.cards.length} unique cards. Try a different prompt.`);
+    const allSuggestedCards = [
+      ...deckConcept.champions.map(getCard),
+      ...deckConcept.coreCards.map(getCard)
+    ].filter(Boolean); // .filter(Boolean) removes any undefined/invalid cards
+
+    const regionCounts: { [region: string]: number } = {};
+    for (const card of allSuggestedCards) {
+      if (card.region !== 'Runeterra' && card.region !== 'Bandle City') { // Exclude general regions for counting
+        regionCounts[card.region] = (regionCounts[card.region] || 0) + 1;
       }
-      // Sort by count first (prefer cards with fewer copies), then by cost
-      candidates.sort((a: any, b: any) => {
-        if (a.count !== b.count) return a.count - b.count;
-        return a.cost - b.cost;
-      });
-      const cardToAdjust = deckData.cards.find((c: any) => c.cardCode === candidates[0].cardCode);
-      if (cardToAdjust) {
-        cardToAdjust.count++;
+    }
+
+    const derivedRegions = Object.keys(regionCounts)
+      .sort((a, b) => regionCounts[b] - regionCounts[a])
+      .slice(0, 2);
+
+    // 2. Filter the suggested cards to only include those from the derived regions.
+    const sanitizedChampions = allSuggestedCards.filter((c: any) => c.type === 'Champion' && derivedRegions.includes(c.region));
+    const sanitizedCoreCards = allSuggestedCards.filter((c: any) => c.type !== 'Champion' && derivedRegions.includes(c.region));
+
+    const deck: { [cardCode: string]: { card: any; count: number } } = {};
+    let totalCards = 0;
+    let championCount = 0;
+
+    const addCard = (card: any, maxCount = 3) => {
+      if (totalCards >= 40) return false; // Hard limit to prevent overfilling
+      if (!card) return false;
+      const existing = deck[card.cardCode];
+
+      if (card.type === "Champion") {
+        if (championCount >= 6 && !existing) return false;
+        if (existing && existing.count >= maxCount) return false;
+      } else {
+        if (existing && existing.count >= maxCount) return false;
+      }
+
+      if (existing) {
+        existing.count++;
         totalCards++;
+        if (card.type === "Champion") championCount++;
       } else {
-        break;
+        deck[card.cardCode] = { card, count: 1 };
+        totalCards++;
+        if (card.type === "Champion") championCount++;
       }
+      return true;
+    };
+
+    // 3. Add the sanitized champions and core cards to the deck.
+    for (const champCard of sanitizedChampions) {
+      for (let i = 0; i < 3; i++) addCard(champCard);
+    }
+    for (const coreCard of sanitizedCoreCards) {
+      for (let i = 0; i < 3; i++) addCard(coreCard);
     }
 
-    // Remove cards if over 40
+    // 4. Create a pool of candidates to fill the rest of the deck.
+    const fillCandidates = allValidCards.filter(c =>
+      derivedRegions.includes(c.region) &&
+      c.type !== 'Champion' &&
+      c.cost > 0
+    );
+    for (let i = fillCandidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [fillCandidates[i], fillCandidates[j]] = [fillCandidates[j], fillCandidates[i]];
+    }
+    
+    // 5. Fill the deck to 40 cards.
+    let attempts = 0;
+    while (totalCards < 40 && attempts < 500) {
+      const existingCards = Object.values(deck).map(d => d.card);
+      let cardAdded = false;
+      for (const card of existingCards) {
+        if (addCard(card)) cardAdded = true;
+        if (totalCards >= 40) break;
+      }
+
+      if (totalCards < 40 && !cardAdded && fillCandidates.length > 0) {
+        for (const candidate of fillCandidates) {
+           if (addCard(candidate)) break;
+           if (totalCards >= 40) break;
+        }
+      }
+      attempts++;
+    }
+
+    // 6. Failsafe Trimmer: Remove cards if over 40
     while (totalCards > 40) {
-      const candidates = deckData.cards.filter((c: any) => c.type !== "Champion" && c.count > 1);
-      if (candidates.length > 0) {
-        candidates.sort((a: any, b: any) => b.cost - a.cost); // Prioritize high-cost cards
-        const cardToAdjust = deckData.cards.find((c: any) => c.cardCode === candidates[0].cardCode);
-        if (cardToAdjust) {
-          cardToAdjust.count--;
-          totalCards--;
-        } else {
-          break; // Should not happen
+      const deckAsArray = Object.values(deck);
+      const nonChamps = deckAsArray.filter(c => c.card.type !== "Champion" && c.count > 0);
+      if (nonChamps.length > 0) {
+        nonChamps.sort((a, b) => a.card.cost - b.card.cost); // Remove cheapest first
+        const cardToRemove = nonChamps[0];
+        cardToRemove.count--;
+        totalCards--;
+        if (cardToRemove.count === 0) {
+          delete deck[cardToRemove.card.cardCode];
         }
       } else {
-        // Try removing single copies of non-champions first
-        const singleCandidates = deckData.cards.filter((c: any) => c.type !== "Champion" && c.count === 1);
-        if (singleCandidates.length > 0) {
-          singleCandidates.sort((a: any, b: any) => b.cost - a.cost);
-          const cardToAdjust = deckData.cards.find((c: any) => c.cardCode === singleCandidates[0].cardCode);
-          if (cardToAdjust) {
-            cardToAdjust.count--;
-            totalCards--;
-          } else {
-            break;
-          }
-        } else {
-          // Last resort: remove champions
-          const champCandidates = deckData.cards.filter((c: any) => c.type === "Champion" && c.count > 0);
-          if (champCandidates.length === 0) break;
-          champCandidates.sort((a: any, b: any) => b.cost - a.cost);
-          const cardToAdjust = deckData.cards.find((c: any) => c.cardCode === champCandidates[0].cardCode);
-          if (cardToAdjust) {
-            cardToAdjust.count--;
-            totalCards--;
-          } else {
-            break; // Should not happen
-          }
+        // Last resort: remove champions if no non-champions are left
+        const champs = deckAsArray.filter(c => c.card.type === "Champion" && c.count > 0);
+        if (champs.length === 0) break; // Should be impossible
+        champs.sort((a, b) => a.card.cost - b.card.cost);
+        const cardToRemove = champs[0];
+        cardToRemove.count--;
+        totalCards--;
+        championCount--;
+        if (cardToRemove.count === 0) {
+          delete deck[cardToRemove.card.cardCode];
         }
       }
     }
-    deckData.cards = deckData.cards.filter((c: any) => c.count > 0);
 
-    // Final validation
-    totalCards = deckData.cards.reduce((sum: number, c: any) => sum + c.count, 0);
-    totalChampions = deckData.cards
-      .filter((c: any) => c.type === "Champion")
-      .reduce((sum: number, c: any) => sum + c.count, 0);
-    
+    // 7. Final validation.
     if (totalCards !== 40) {
-      console.error("Deck validation failed:", {
-        totalCards,
-        totalChampions,
-        cardCount: deckData.cards.length,
-        cards: deckData.cards.map((c: any) => `${c.name} x${c.count} (${c.cost} mana)`),
-      });
-      throw new Error(`Deck has ${totalCards} cards (need 40) with only ${deckData.cards.length} unique cards. Try a different prompt.`);
+      throw new Error(`Failed to construct a valid 40-card deck. Ended up with ${totalCards} cards. This may be due to a very restrictive prompt or too few available cards in the selected regions.`);
     }
-    
-    if (totalChampions > 6) {
-      throw new Error(`Too many champion cards: ${totalChampions}/6. Please try again.`);
-    }
-    
-    // Re-extract champions from the corrected cards array
-    deckData.champions = [...new Set(deckData.cards
-      .filter((card: any) => card.type === "Champion")
-      .map((card: any) => card.name))];
-    
-    // Generate deck code from the validated card list
-    console.log("Generating deck code for validated cards:", deckData.cards.map((c: any) => `${c.cardCode} x${c.count}`));
-    const deckCode = generateDeckCode(deckData.cards);
-    console.log("Successfully generated deck code:", deckCode);
-    
+
+    const finalCards = Object.values(deck).map(({ card, count }) => ({
+      cardCode: card.cardCode,
+      count: count,
+      name: card.name,
+      cost: card.cost,
+      type: card.type,
+      region: card.region,
+    }));
+
+    // Generate deck code
+    const deckCode = generateDeckCode(finalCards);
+
     return {
-      ...deckData,
+      name: deckConcept.name,
+      description: deckConcept.description,
+      cards: finalCards,
+      regions: deckConcept.regions,
+      champions: deckConcept.champions,
       deckCode,
     };
   },
 });
 
+interface CardInfo {
+  cardCode: string;
+  count: number;
+  name: string;
+  cost: number;
+  type: string;
+  region: string;
+}
+
+interface ParsedDeck {
+  cards: CardInfo[];
+  regions: string[];
+  champions: string[];
+  totalCards: number;
+}
+
 export const parseDeckCode = internalAction({
   args: {
     deckCode: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<ParsedDeck> => {
     try {
-      const cards = DeckEncoder.decode(args.deckCode);
+      const decodedCards = DeckEncoder.decode(args.deckCode);
       
-      const cardList = cards.map(card => {
-        const info = Card.fromCode(card.code);
+      // Fetch the full card database to look up metadata
+      const cardDatabase: any = await ctx.runQuery(internal.cardData.getAllCardsForAI, {});
+      const allCards: any[] = [
+        ...cardDatabase.champions,
+        ...cardDatabase.units,
+        ...cardDatabase.spells
+      ];
+      const cardLookup = new Map<string, any>(allCards.map((card: any) => [card.cardCode, card]));
+
+      const cardList: CardInfo[] = decodedCards.map((decodedCard): CardInfo => {
+        const info = cardLookup.get(decodedCard.code);
+        if (!info) {
+          // This case should be rare if the database is up to date
+          console.warn(`Card with code ${decodedCard.code} not found in database.`);
+          return {
+            cardCode: decodedCard.code,
+            count: decodedCard.count,
+            name: "Unknown Card",
+            cost: 0,
+            type: "Unknown",
+            region: "Unknown",
+          };
+        }
         return {
-          cardCode: card.code,
-          count: card.count,
+          cardCode: decodedCard.code,
+          count: decodedCard.count,
           name: info.name,
           cost: info.cost,
           type: info.type,
@@ -371,37 +369,19 @@ export const parseDeckCode = internalAction({
         };
       });
 
-      // Extract regions from card codes (positions 2-3 in the card code)
-      const regionCodes = new Set(cards.map(c => c.code.substring(2, 4)));
-      const regionMap: Record<string, string> = {
-        'DE': 'Demacia',
-        'FR': 'Freljord',
-        'IO': 'Ionia',
-        'NX': 'Noxus',
-        'PZ': 'Piltover & Zaun',
-        'SI': 'Shadow Isles',
-        'BW': 'Bilgewater',
-        'MT': 'Targon',
-        'SH': 'Shurima',
-        'BC': 'Bandle City',
-        'RU': 'Runeterra',
-      };
-      
-      const regions = Array.from(regionCodes).map(code => regionMap[code] || code);
-
-      // Extract champions from the card list
-      const champions = cardList
-        .filter(card => card.type === "Champion")
-        .map(card => card.name);
+      // Extract regions and champions from the metadata-rich card list
+      const regions = [...new Set(cardList.map((c: CardInfo) => c.region).filter((r: string) => r !== "Unknown"))];
+      const champions = [...new Set(cardList.filter((c: CardInfo) => c.type === "Champion").map((c: CardInfo) => c.name))];
 
       return {
         cards: cardList,
         regions,
-        champions: [...new Set(champions)], // Remove duplicates
-        totalCards: cardList.reduce((sum, c) => sum + c.count, 0),
+        champions,
+        totalCards: cardList.reduce((sum: number, c: CardInfo) => sum + c.count, 0),
       };
     } catch (error) {
-      throw new Error("Invalid deck code");
+      console.error("Error decoding deck code:", error);
+      throw new Error("Invalid or corrupted deck code provided.");
     }
   },
 });
@@ -447,28 +427,29 @@ export const importDeckFromCode = action({
 });
 
 function generateDeckCode(cards: Array<{ cardCode: string; count: number }>): string {
-  // Validate card code format (must be 7 chars: 2 digits + 2 letters + 3 digits)
-  const validPattern = /^\d{2}[A-Z]{2}\d{3}$/;
-  const invalidCards = cards.filter(c => !validPattern.test(c.cardCode));
-  
-  if (invalidCards.length > 0) {
-    throw new Error(`Invalid card code format: ${invalidCards.map(c => c.cardCode).join(", ")}`);
+  try {
+    // Convert to the format expected by the LoR deck encoder
+    const lorCards = cards.map(c => {
+      const set = c.cardCode.substring(0, 2);
+      const faction = c.cardCode.substring(2, 4);
+      const number = c.cardCode.substring(4, 7);
+      return Card.from(set, faction, number, c.count);
+    });
+
+    // Generate official LoR deck code
+    const encoded = DeckEncoder.encode(lorCards);
+
+    if (!encoded || encoded.length === 0) {
+      throw new Error("Failed to generate deck code");
+    }
+
+    return encoded;
+  } catch (error: any) {
+    console.error("Error during deck code generation:", error);
+    // Add more context to the error
+    const cardCodes = cards.map(c => c.cardCode).join(", ");
+    throw new Error(`Failed to encode deck. Please check card codes: [${cardCodes}]. Original error: ${error.message}`);
   }
-  
-  // Convert to the format expected by the LoR deck encoder
-  const lorCards = cards.map(c => ({
-    code: c.cardCode,
-    count: c.count,
-  }));
-  
-  // Generate official LoR deck code
-  const encoded = DeckEncoder.encode(lorCards as any);
-  
-  if (!encoded || encoded.length === 0) {
-    throw new Error("Failed to generate deck code");
-  }
-  
-  return encoded;
 }
 
 export const regenerateDeckCode = action({

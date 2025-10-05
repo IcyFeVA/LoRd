@@ -167,52 +167,55 @@ Return ONLY a valid JSON object with this exact structure:
     const deckConcept = JSON.parse(jsonStr);
 
     // --- DECK CONSTRUCTION LOGIC ---
+
+    // Sanitize AI suggestions to ensure they are valid and consistent.
+    const getCard = (name: string) => cardLookupByName.get(name.toLowerCase());
+
+    const sanitizedChampions = deckConcept.champions
+      .map(getCard)
+      .filter((c: any) => c && deckConcept.regions.includes(c.region));
+
+    const sanitizedCoreCards = deckConcept.coreCards
+      .map(getCard)
+      .filter((c: any) => c && deckConcept.regions.includes(c.region));
+
     const deck: { [cardCode: string]: { card: any; count: number } } = {};
     let totalCards = 0;
     let championCount = 0;
 
     const addCard = (card: any, maxCount = 3) => {
-      if (!card || !deckConcept.regions.includes(card.region)) {
-        return false; // Card is not in the allowed regions
-      }
+      if (!card) return false;
 
       const existing = deck[card.cardCode];
       if (card.type === "Champion") {
         if (championCount >= 6 && !existing) return false;
         if (existing && existing.count >= maxCount) return false;
-        if (championCount >= 6 && existing.count >= existing.count) return false;
+      } else {
+        if (existing && existing.count >= maxCount) return false;
       }
 
       if (existing) {
-        if (existing.count < maxCount) {
-          existing.count++;
-          totalCards++;
-          if (card.type === "Champion") championCount++;
-          return true;
-        }
+        existing.count++;
+        totalCards++;
+        if (card.type === "Champion") championCount++;
       } else {
         deck[card.cardCode] = { card, count: 1 };
         totalCards++;
         if (card.type === "Champion") championCount++;
-        return true;
       }
-      return false;
+      return true;
     };
 
-    // 1. Add Champions (up to 3 copies each, max 6 total)
-    for (const championName of deckConcept.champions) {
-      const champCard = cardLookupByName.get(championName.toLowerCase());
-      if (champCard) {
-        for (let i = 0; i < 3; i++) {
-          addCard(champCard);
-        }
+    // 1. Add Sanitized Champions
+    for (const champCard of sanitizedChampions) {
+      for (let i = 0; i < 3; i++) {
+        addCard(champCard);
       }
     }
 
-    // 2. Add Core Cards (up to 3 copies each)
-    for (const cardName of deckConcept.coreCards) {
-      const coreCard = cardLookupByName.get(cardName.toLowerCase());
-      if (coreCard && coreCard.type !== "Champion") {
+    // 2. Add Sanitized Core Cards
+    for (const coreCard of sanitizedCoreCards) {
+      if (coreCard.type !== "Champion") {
         for (let i = 0; i < 3; i++) {
           addCard(coreCard);
         }

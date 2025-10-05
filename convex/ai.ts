@@ -211,29 +211,30 @@ Return ONLY a valid JSON object with this exact structure:
     }
 
     // 3. Fill remaining slots to reach 40 cards
-    const fillSlots = (cardType: "Unit" | "Spell") => {
-      const candidates = allValidCards.filter(c =>
-        c.type === cardType &&
-        deckConcept.regions.includes(c.region) &&
-        c.cost > 0 &&
-        !deck[c.cardCode]
-      );
-      // Sort by cost, descending, to add more impactful cards first
-      candidates.sort((a, b) => b.cost - a.cost);
+    const fillCandidates = allValidCards.filter(c =>
+      deckConcept.regions.includes(c.region) &&
+      c.type !== 'Champion' &&
+      c.cost > 0
+    );
 
-      for (const candidate of candidates) {
-        if (totalCards >= 40) break;
-        const maxCopies = candidate.type === "Champion" ? 0 : 3;
-        for (let i = 0; i < maxCopies; i++) {
-          if (totalCards < 40) {
-            addCard(candidate);
-          }
-        }
-      }
-    };
-    
-    fillSlots("Unit");
-    fillSlots("Spell");
+    // Shuffle candidates to get variety
+    for (let i = fillCandidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [fillCandidates[i], fillCandidates[j]] = [fillCandidates[j], fillCandidates[i]];
+    }
+
+    let candidateIndex = 0;
+    let attempts = 0; // Safety break
+    while (totalCards < 40 && attempts < 200) {
+      if (fillCandidates.length === 0) break;
+      const cardToAdd = fillCandidates[candidateIndex];
+      addCard(cardToAdd);
+
+      // Move to the next candidate, but loop back to the start
+      // to try and add more copies of the same cards.
+      candidateIndex = (candidateIndex + 1) % fillCandidates.length;
+      attempts++;
+    }
 
     // 4. Final adjustments to hit exactly 40 cards
     // Remove excess cards, starting with cheapest non-champions
